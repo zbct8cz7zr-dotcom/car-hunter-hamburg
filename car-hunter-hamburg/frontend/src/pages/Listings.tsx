@@ -10,7 +10,7 @@ const SORTS: { key: "score" | "price" | "mileage_km"; label: string }[] = [
 ];
 
 export default function Listings() {
-  const { settings, loading: settingsLoading } = useSettings();
+  const { settings, loading: settingsLoading, error: settingsError, reload: reloadSettings } = useSettings();
   const [sort, setSort] = useState<"score" | "price" | "mileage_km">("score");
   const order = sort === "price" || sort === "mileage_km" ? "asc" : "desc";
   const { cars, total, loading, error } = useCars(settings, { sort, order });
@@ -42,7 +42,21 @@ export default function Listings() {
           ))}
         </div>
 
-        {settingsLoading || loading ? (
+        {settingsLoading ? (
+          <p className="text-[13px] text-[#9A9483] text-center py-8">Chargement…</p>
+        ) : settingsError ? (
+          <div className="bg-white border border-bad p-6 text-center">
+            <p className="text-[13px] text-bad mb-3">
+              Impossible de joindre le serveur : {settingsError}
+            </p>
+            <button
+              onClick={reloadSettings}
+              className="text-[12.5px] font-medium px-3 py-1.5 border border-bad text-bad"
+            >
+              Réessayer
+            </button>
+          </div>
+        ) : loading ? (
           <p className="text-[13px] text-[#9A9483] text-center py-8">Chargement…</p>
         ) : error ? (
           <p className="text-[13px] text-bad text-center py-8">{error}</p>
