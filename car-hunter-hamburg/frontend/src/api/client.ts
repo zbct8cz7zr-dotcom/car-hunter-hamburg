@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000").replace(/\/+$/, "");
 
 class ApiError extends Error {
   status: number;
@@ -29,7 +29,4 @@ export const api = {
     request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
   patch: <T,>(path: string, body: unknown) =>
     request<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
-  delete: <T,>(path: string) => request<T>(path, { method: "DELETE" }),
-};
-
-export { ApiError };
+  delete: <T,>(path: string) => request
