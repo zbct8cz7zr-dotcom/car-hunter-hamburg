@@ -7,7 +7,7 @@ import CarCard from "../components/CarCard";
 import { triggerScrape } from "../api/cars";
 
 export default function Dashboard() {
-  const { settings, loading: settingsLoading } = useSettings();
+  const { settings, loading: settingsLoading, error: settingsError, reload: reloadSettings } = useSettings();
   const { cars, total, loading, error, reload } = useCars(settings, { sort: "score", order: "desc" });
   const [scraping, setScraping] = useState(false);
   const [scrapeMessage, setScrapeMessage] = useState<string | null>(null);
@@ -78,7 +78,21 @@ export default function Dashboard() {
 
         <h2 className="text-[11px] uppercase tracking-[0.15em] text-[#6B6558] mt-6 mb-3">Meilleures opportunités</h2>
 
-        {settingsLoading || loading ? (
+        {settingsLoading ? (
+          <p className="text-[13px] text-[#9A9483] text-center py-8">Chargement…</p>
+        ) : settingsError ? (
+          <div className="bg-white border border-bad p-6 text-center">
+            <p className="text-[13px] text-bad mb-3">
+              Impossible de joindre le serveur : {settingsError}
+            </p>
+            <button
+              onClick={reloadSettings}
+              className="text-[12.5px] font-medium px-3 py-1.5 border border-bad text-bad"
+            >
+              Réessayer
+            </button>
+          </div>
+        ) : loading ? (
           <p className="text-[13px] text-[#9A9483] text-center py-8">Chargement…</p>
         ) : error ? (
           <p className="text-[13px] text-bad text-center py-8">{error}</p>
