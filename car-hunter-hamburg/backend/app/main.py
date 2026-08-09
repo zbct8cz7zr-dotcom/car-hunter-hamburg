@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.database import Base, engine
-from app.routers import cars, settings, scrape, score, history
+from app.routers import cars, settings, scrape, score, history, seed
 
 # Crée les tables si elles n'existent pas encore (suffisant pour SQLite en dev ;
 # on passera à Alembic pour les migrations dès que le schéma se stabilise).
@@ -22,8 +22,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # URL du frontend Vite en dev
-    allow_credentials=false,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -39,6 +39,7 @@ app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(scrape.router, prefix="/api/scrape", tags=["scrape"])
 app.include_router(score.router, prefix="/api/score", tags=["score"])
 app.include_router(history.router, prefix="/api/history", tags=["history"])
+app.include_router(seed.router, prefix="/api/seed", tags=["seed"])
 
 # --- Sera branché à l'étape "Notifications" ---
 # from app.routers import alerts
