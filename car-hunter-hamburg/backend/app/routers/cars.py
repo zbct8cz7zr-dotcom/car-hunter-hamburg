@@ -7,6 +7,7 @@ actions utilisateur (masquer une annonce, etc.).
 from typing import Optional, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -53,15 +54,11 @@ def list_cars(
     if fuel_types:
         wanted = [f.strip().lower() for f in fuel_types.split(",") if f.strip()]
         if wanted:
-            q = q.filter(Car.fuel_type.ilike(f"%{wanted[0]}%")) if len(wanted) == 1 else q.filter(
-                Car.fuel_type.in_(wanted)
-            )
+            q = q.filter(func.lower(Car.fuel_type).in_(wanted))
     if brands:
         wanted = [b.strip().lower() for b in brands.split(",") if b.strip()]
         if wanted:
-            q = q.filter(Car.brand.ilike(f"%{wanted[0]}%")) if len(wanted) == 1 else q.filter(
-                Car.brand.in_(wanted)
-            )
+            q = q.filter(func.lower(Car.brand).in_(wanted))
 
     total = q.count()
 
