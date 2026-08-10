@@ -1,12 +1,31 @@
 """
-Scraper pour eBay Kleinanzeigen (kleinanzeigen.de) — généralement moins
-protégé contre le scraping que mobile.de/AutoScout24, mais reste sujet à
-changement sans préavis. Mêmes précautions : sélecteurs à vérifier,
-fréquence de requêtes raisonnable, gestion du blocage éventuel.
+Scraper pour eBay Kleinanzeigen (kleinanzeigen.de).
 
-Kleinanzeigen étant principalement un site de particulier à particulier,
-c'est une bonne source complémentaire pour des prix plus bas, mais avec
-moins de garanties (pas de reprise, historique d'entretien souvent flou).
+Historique des corrections :
+- v2 (07/08/2026) : chemin de recherche corrigé, détection de marque par
+  mot-clé plutôt que "premier mot du titre".
+- v3 (09/08/2026) : le conteneur de chaque annonce n'est plus recherché
+  via des noms de balises fixes (`<article>`, `<li>`) — cette hypothèse
+  s'est révélée fragile (0 résultat en production alors que les annonces
+  étaient bien présentes sur le site). À la place, on REMONTE depuis le
+  lien `/s-anzeige/...` ancêtre par ancêtre jusqu'à trouver un conteneur
+  dont le texte contient à la fois un prix ("€") et un kilométrage
+  ("km") — une méthode indépendante du HTML exact utilisé par le site,
+  qui continuera de fonctionner même si les noms de balises changent.
+
+Recherche vérifiée manuellement le 09/08/2026 : la page
+https://www.kleinanzeigen.de/s-autos/hamburg/auto/k0c216l9409 contient
+bien des liens /s-anzeige/, avec un <h2> pour le titre et le motif de
+texte "X.XXX € ... XXX.XXX km EZ MM/YYYY" pour prix/kilométrage/année —
+confirmé par une récupération réelle de la page.
+
+Les titres d'annonces sont du texte libre écrit par des particuliers
+("VW Goli 7 - Baujahr 2014", "Auto sehr gut erhalten", fautes de frappe
+incluses) — impossible de fiablement découper "marque + modèle" en
+supposant que le premier mot est la marque. À la place, on cherche une
+marque connue (KNOWN_BRANDS) n'importe où dans le titre. Une annonce
+dont aucune marque connue n'est détectée est ignorée plutôt que
+d'insérer une donnée fausse en base.
 """
 import time
 import re
@@ -19,7 +38,38 @@ from app.scrapers.base import ScraperBase, SearchCriteria, RawListing, ScraperBl
 
 REQUEST_DELAY_SECONDS = 2.0
 BASE_URL = "https://www.kleinanzeigen.de"
-SEARCH_PATH = "/s-autos/hamburg"
+# Catégorie "Autos" (c216) à Hambourg (l9409) — vérifié le 09/08/2026
+SEARCH_PATH = "/s-autos/hamburg/auto/k0c216l9409"
+
+PRICE_RE = re.compile(r"([\d.]+)\s*€")
+KM_EZ_RE = re.compile(r"([\d.]+)\s*km\s*EZ\s*(\d{2})/(\d{4})")
+MAX_ANCESTOR_LEVELS = 8  # limite de sécurité pour ne pas remonter jusqu'à <body>
+
+# Marques connues à détecter dans les titres libres. Reprend les marques
+# favorites habituelles + quelques marques fréquentes sur Kleinanzeigen,
+# pour ne pas rater une bonne affaire hors de la liste favorite initiale.
+KNOWN_BRANDS = [
+    "toyota", "honda", "mazda", "hyundai", "kia", "volkswagen", "vw", "skoda",
+    "bmw", "mercedes", "mercedes-benz", "audi", "opel", "ford", "renault",
+    "peugeot", "citroen", "citroën", "seat", "nissan", "fiat", "volvo",
+    "dacia", "mini", "smart", "mitsubishi", "suzuki", "subaru", "porsche",
+    "chevrolet", "jaguar",
+]
+
+
+def _find_container(link):
+    """Remonte les ancêtres du lien jusqu'à trouver un conteneur dont le
+    texte contient à la fois un prix et un kilométrage — indépendant du
+    nom des balises HTML utilisées par le site."""
+    node = link.parent
+    for _ in range(MAX_ANCESTOR_LEVELS):
+        if node is None:
+            break
+        text = node.get_text(" ", strip=True)
+        if "€" in text and "km" in text:
+            return node
+        node = node.parent
+    return link.parent  # repli : au moins le parent direct
 
 
 class KleinanzeigenScraper(ScraperBase):
@@ -33,13 +83,8 @@ class KleinanzeigenScraper(ScraperBase):
         results: list[RawListing] = []
 
         with httpx.Client(headers=headers, timeout=15.0, follow_redirects=True) as client:
-            params = {
-                "priceType": "FIXED",
-                "maxPrice": criteria.budget_max,
-            }
-
             time.sleep(REQUEST_DELAY_SECONDS)
-            response = client.get(f"{BASE_URL}{SEARCH_PATH}", params=params)
+            response = client.get(f"{BASE_URL}{SEARCH_PATH}")
 
             if response.status_code in (403, 429):
                 raise ScraperBlockedError(
@@ -48,56 +93,71 @@ class KleinanzeigenScraper(ScraperBase):
                 )
 
             soup = BeautifulSoup(response.text, "lxml")
-            listing_nodes = soup.select("article.aditem")  # à vérifier/ajuster
 
-            if not listing_nodes and "captcha" in response.text.lower():
+            if "captcha" in response.text.lower():
                 raise ScraperBlockedError(self.name, "page de vérification / CAPTCHA détectée")
 
-            for node in listing_nodes:
-                listing = self._parse_listing(node)
-                if listing and listing.mileage_km <= criteria.km_max:
+            # Toutes les annonces pointent vers une URL /s-anzeige/... —
+            # motif stable, indépendant du nom des classes/balises CSS.
+            seen_hrefs = set()
+            for link in soup.select("a[href*='/s-anzeige/']"):
+                href = link.get("href", "")
+                if href in seen_hrefs:
+                    continue
+                seen_hrefs.add(href)
+
+                listing = self._parse_listing(link, href)
+                if listing and listing.mileage_km <= criteria.km_max and listing.price <= criteria.budget_max:
                     results.append(listing)
 
         return results
 
-    def _parse_listing(self, node) -> RawListing | None:
+    def _parse_listing(self, link, href: str) -> RawListing | None:
         try:
-            link = node.select_one("a.ellipsis")
-            price_text = node.select_one(".aditem-main--middle--price-shipping--price")
-            description = node.select_one(".aditem-main--middle--description")
-
-            if not (link and price_text):
+            container = _find_container(link)
+            if container is None:
                 return None
 
-            price_raw = price_text.get_text(strip=True)
-            if "vb" in price_raw.lower():  # "à débattre" — on garde le chiffre quand même
-                price_raw = price_raw.lower().replace("vb", "")
-            price = int(re.sub(r"[^\d]", "", price_raw) or 0)
+            text = container.get_text(" ", strip=True)
 
-            title = link.get_text(strip=True)
-            brand_model = title.split(" ", 1)
-            brand = brand_model[0]
-            model = brand_model[1] if len(brand_model) > 1 else ""
+            title_el = container.find(["h2", "h3"])
+            title = title_el.get_text(strip=True) if title_el else link.get_text(strip=True)
+            if not title:
+                return None
 
-            # Le kilométrage n'est pas toujours dans un champ dédié sur
-            # Kleinanzeigen : on tente de l'extraire de la description.
-            mileage = 0
-            if description:
-                match = re.search(r"([\d.]{4,7})\s*km", description.get_text())
-                if match:
-                    mileage = int(match.group(1).replace(".", ""))
+            title_lower = title.lower()
+            brand = next((b for b in KNOWN_BRANDS if b in title_lower), None)
+            if brand is None:
+                # Pas de marque reconnue dans ce titre en texte libre —
+                # on préfère ignorer l'annonce plutôt que deviner.
+                return None
+            brand_display = "Volkswagen" if brand == "vw" else brand.replace("-", " ").title()
+            model = title  # le titre entier sert de "modèle" faute de champ structuré
 
-            url = link["href"]
-            source_id = url.rstrip("/").split("/")[-1]
+            price_match = PRICE_RE.search(text)
+            if not price_match:
+                return None
+            price = int(price_match.group(1).replace(".", ""))
+
+            km_ez_match = KM_EZ_RE.search(text)
+            mileage = int(km_ez_match.group(1).replace(".", "")) if km_ez_match else 0
+            year = int(km_ez_match.group(3)) if km_ez_match else None
+
+            url = href if href.startswith("http") else f"{BASE_URL}{href}"
+            # L'ID kleinanzeigen est le dernier segment numérique de l'URL
+            source_id_match = re.search(r"(\d+)-\d+-\d+/?$", href)
+            source_id = source_id_match.group(1) if source_id_match else href.rstrip("/").split("/")[-1]
 
             return RawListing(
                 source=self.name,
                 source_id=source_id,
-                url=url if url.startswith("http") else f"{BASE_URL}{url}",
-                brand=brand,
+                url=url,
+                brand=brand_display,
                 model=model,
                 price=price,
                 mileage_km=mileage,
+                year=year,
+                description=text,
             )
         except (AttributeError, ValueError, KeyError):
             return None
