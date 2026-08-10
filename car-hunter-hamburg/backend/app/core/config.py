@@ -33,7 +33,10 @@ class Settings(BaseSettings):
 
     # Scraping
     scrape_interval_minutes: int = 30
-    scrape_user_agent: str = "Mozilla/5.0 (compatible; CarHunterHamburg/1.0)"
+    scrape_user_agent: str = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    )
 
     class Config:
         env_file = ".env"
